@@ -23,14 +23,21 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 app = Flask(__name__)
 CORS(app)
 
-# SQLite DB in backend folder
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///" + os.path.join(BASE_DIR, "preprints.db")
+# ==========================
+# DATABASE (Supabase Postgres via DATABASE_URL, fallback SQLite for local)
+# ==========================
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if not DATABASE_URL:
+  # local dev fallback
+  DATABASE_URL = "sqlite:///" + os.path.join(BASE_DIR, "preprints.db")
+
+app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db = SQLAlchemy(app)
 
 # ==========================
-# SUPABASE CONFIG
+# SUPABASE CONFIG (Storage)
 # ==========================
 
 SUPABASE_URL: str | None = os.environ.get("SUPABASE_URL")
@@ -339,7 +346,7 @@ def health():
 # ENTRYPOINT
 # ==========================
 
-# Ensure DB exists whether running via python app.py or gunicorn
+# Ensure tables exist whether running via python app.py or gunicorn
 init_db()
 
 if __name__ == "__main__":
