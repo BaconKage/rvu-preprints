@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 import os
 import datetime
+import urllib.parse
+from functools import wraps
+
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
@@ -41,6 +44,10 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
     )
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+# Admin secret for delete operations
+ADMIN_SECRET: str | None = os.environ.get("ADMIN_SECRET")
+
 
 # ==========================
 # MODELS
@@ -114,6 +121,52 @@ def generate_fake_doi():
     count = Preprint.query.filter(Preprint.doi.like(f"{month_prefix}-%")).count()
     seq = f"{count + 1:04d}"
     return f"{month_prefix}-{seq}"
+
+
+def require_admin(f):
+    """
+    Simple admin guard using a shared secret.
+    Requests must send header: X-ADMIN-KEY: <ADMIN_SECRET>
+    """
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        header_key = request.headers.get("X-ADMIN-KEY")
+        if not ADMIN_SECRET or header_key != ADMIN_SECRET:
+            return jsonify({"error": "Unauthorized"}), 401
+        return f(*args, **kwargs)
+    return wrapper
+
+
+def get_storage_path_from_url(url: str | None) -> str | None:
+    """
+    Convert a Supabase public URL back to the storage path.
+
+    Example:
+      https://xyz.supabase.co/storage/v1/object/public/preprints/preprints/2025_foo.pdf
+    -> "preprints/2025_foo.pdf"
+    """
+    if not url:
+        return None
+
+    # Fast path: strip known prefix
+    prefix = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/"
+    if url.startswith(prefix):
+        return url[len(prefix):]
+
+    # Fallback: parse URL, extract after 'public/<bucket>/'
+    try:
+        parsed = urllib.parse.urlparse(url)
+        parts = parsed.path.split("/")
+        # .../storage/v1/object/public/<bucket>/<path...>
+        if "public" in parts:
+            idx = parts.index("public")
+            # parts[idx+1] should be bucket, rest is the path
+            if len(parts) > idx + 2:
+                return "/".join(parts[idx + 2 :])
+    except Exception:
+        pass
+
+    return None
 
 
 # ==========================
@@ -236,6 +289,35 @@ def mint_doi(pid):
     preprint.doi = generate_fake_doi()
     db.session.commit()
     return jsonify({"doi": preprint.doi}), 201
+
+
+@app.route("/api/admin/preprints/<int:pid>/", methods=["DELETE"])
+@require_admin
+def admin_delete_preprint(pid):
+    """
+    Admin-only hard delete:
+      - Removes PDF from Supabase Storage (best effort)
+      - Deletes DB row
+
+    Call this with header: X-ADMIN-KEY: <your ADMIN_SECRET>
+    """
+    preprint = Preprint.query.get_or_404(pid)
+
+    # Try to delete the file from Supabase
+    storage_path = get_storage_path_from_url(preprint.pdf_filename)
+    if storage_path:
+        try:
+            # Supabase expects a list of paths
+            res = supabase.storage.from_(SUPABASE_BUCKET).remove([storage_path])
+            print("Supabase remove result:", res)
+        except Exception as e:
+            # Log but don't block DB deletion
+            print("Error deleting from Supabase Storage:", e)
+
+    # Delete the DB entry
+    db.session.delete(preprint)
+    db.session.commit()
+    return jsonify({"status": "deleted", "id": pid}), 200
 
 
 @app.route("/api/files/<path:filename>")
