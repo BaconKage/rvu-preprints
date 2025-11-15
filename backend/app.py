@@ -28,11 +28,18 @@ CORS(app)
 # ==========================
 DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
-  # local dev fallback
-  DATABASE_URL = "sqlite:///" + os.path.join(BASE_DIR, "preprints.db")
+    # local dev fallback
+    DATABASE_URL = "sqlite:///" + os.path.join(BASE_DIR, "preprints.db")
 
-app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config.update(
+    SQLALCHEMY_DATABASE_URI=DATABASE_URL,
+    SQLALCHEMY_TRACK_MODIFICATIONS=False,
+    # 🔥 Make the pool resilient to dropped connections
+    SQLALCHEMY_ENGINE_OPTIONS={
+        "pool_pre_ping": True,   # test connection before each use
+        "pool_recycle": 300,     # recycle connections every 5 minutes
+    },
+)
 
 db = SQLAlchemy(app)
 
