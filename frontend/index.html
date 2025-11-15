@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>RVU Preprints</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { margin:0; font-family: system-ui, sans-serif; background:#0b1020; color:#e5e7eb; }
+    header { padding:16px 24px; border-bottom:1px solid #1f2937; background:#050816; display:flex; justify-content:space-between; align-items:center;}
+    h1 { margin:0; font-size:20px;}
+    .layout { max-width:1100px; margin:24px auto; display:grid; grid-template-columns: 2fr 1fr; gap:20px; padding:0 16px;}
+    .panel { background:#111827; border-radius:12px; padding:16px; border:1px solid #1f2937;}
+    .item { padding:12px; border-radius:10px; border:1px solid #1f2937; margin-bottom:10px; cursor:pointer; background:#020617;}
+    .item:hover { border-color:#4f46e5; }
+    .title { font-weight:600; margin-bottom:4px;}
+    .abstract { font-size:14px; color:#9ca3af;}
+    .chip { display:inline-block; padding:4px 10px; font-size:13px; border-radius:999px; border:1px solid #374151; margin-right:6px; margin-bottom:4px; }
+    .doi { font-size:12px; color:#a5b4fc; margin-top:6px;}
+    button, input, textarea, select { font-family: inherit; }
+    .btn { padding:8px 14px; border-radius:999px; border:1px solid #4f46e5; background:#4f46e5; color:white; font-size:14px; cursor:pointer; }
+    .btn.secondary { background:transparent; color:#e5e7eb; border-color:#374151;}
+    .field { margin-bottom:8px; }
+    .field label { font-size:13px; display:block; margin-bottom:3px; color:#9ca3af;}
+    .field input, .field textarea, .field select {
+      width:100%; padding:8px; border-radius:8px; border:1px solid #374151; background:#020617; color:#e5e7eb; font-size:14px;
+    }
+    #modal { position:fixed; inset:0; background:rgba(0,0,0,0.6); display:none; justify-content:center; align-items:center;}
+    #modal-box { width:95%; max-width:600px; background:#020617; border-radius:12px; padding:16px; border:1px solid #374151;}
+    #pdf-viewer { position:fixed; inset:0; background:#000; display:none;}
+    #pdf-frame { width:100%; height:100%; border:0;}
+    #pdf-close { position:absolute; top:16px; right:20px; background:#ef4444; color:white; border:none; border-radius:8px; padding:8px 12px; cursor:pointer;}
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>RVU Preprints</h1>
+  <button class="btn" id="open-upload">Upload Preprint</button>
+</header>
+
+<div class="layout">
+  <div class="panel">
+    <div style="display:flex; gap:8px; margin-bottom:10px;">
+      <input id="search" type="search" placeholder="Search title or abstract..."
+             style="flex:1; padding:8px; border-radius:999px; border:1px solid #374151; background:#020617; color:#e5e7eb;">
+      <select id="category" style="padding:8px; border-radius:999px; border:1px solid #374151; background:#020617; color:#e5e7eb;">
+        <option value="">All</option>
+        <option value="cs">CS</option>
+        <option value="ai">AI</option>
+        <option value="math">Math</option>
+        <option value="physics">Physics</option>
+      </select>
+    </div>
+    <div id="list"></div>
+  </div>
+
+  <div class="panel" id="detail">
+    <h2 style="margin-top:0;font-size:18px;">Details</h2>
+    <div id="detail-content" style="font-size:14px; color:#9ca3af;">Select a preprint to see details.</div>
+  </div>
+</div>
+
+<!-- Upload modal -->
+<div id="modal">
+  <div id="modal-box">
+    <h2 style="margin-top:0;">Upload Preprint</h2>
+    <form id="upload-form">
+      <div class="field">
+        <label>Title *</label>
+        <input name="title" required>
+      </div>
+      <div class="field">
+        <label>Authors (comma-separated)</label>
+        <input name="authors" placeholder="Name1, Name2">
+      </div>
+      <div class="field">
+        <label>Faculty Guide</label>
+        <input name="faculty">
+      </div>
+      <div class="field">
+        <label>Course Code</label>
+        <input name="course_code" placeholder="e.g., FDS, FDE">
+      </div>
+      <div class="field">
+        <label>Category</label>
+        <select name="category">
+          <option value="cs">CS</option>
+          <option value="ai">AI / ML</option>
+          <option value="math">Math</option>
+          <option value="physics">Physics</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Abstract *</label>
+        <textarea name="abstract" rows="5" required></textarea>
+      </div>
+      <div class="field">
+        <label><input type="checkbox" name="mint_doi" value="true"> Mint fake DOI</label>
+      </div>
+      <div class="field">
+        <label>PDF File *</label>
+        <input type="file" name="pdf_file" accept="application/pdf" required>
+      </div>
+
+      <div style="display:flex; gap:8px; margin-top:10px;">
+        <button type="submit" class="btn">Upload</button>
+        <button type="button" class="btn secondary" id="close-upload">Cancel</button>
+      </div>
+      <div id="upload-msg" style="margin-top:6px; font-size:13px; color:#9ca3af;"></div>
+    </form>
+  </div>
+</div>
+
+<!-- PDF viewer -->
+<div id="pdf-viewer">
+  <button id="pdf-close">Close</button>
+  <iframe id="pdf-frame"></iframe>
+</div>
+
+<script>
+  const API_BASE = "http://localhost:5001/api";
+  const $ = sel => document.querySelector(sel);
+  const listEl = $("#list");
+  let allPreprints = [];
+
+  async function loadPreprints() {
+    const q = $("#search").value.trim();
+    const cat = $("#category").value;
+    const params = new URLSearchParams();
+    if (q) params.append("q", q);
+    if (cat) params.append("category", cat);
+    const res = await fetch(`${API_BASE}/preprints/?` + params.toString());
+    allPreprints = await res.json();
+    renderList();
+  }
+
+  function renderList() {
+    if (!allPreprints.length) {
+      listEl.innerHTML = "<p style='color:#9ca3af;'>No preprints yet.</p>";
+      $("#detail-content").innerHTML = "Select a preprint to see details.";
+      return;
+    }
+    listEl.innerHTML = allPreprints.map(p => `
+      <div class="item" data-id="${p.id}">
+        <div class="title">${p.title}</div>
+        <div class="abstract">${(p.abstract || "").slice(0, 150)}...</div>
+        <div class="chip">${p.category || "uncategorized"}</div>
+        ${p.course_code ? `<span class="chip">${p.course_code}</span>` : ""}
+        ${p.doi ? `<div class="doi">${p.doi}</div>` : ""}
+      </div>
+    `).join("");
+
+    Array.from(document.querySelectorAll(".item")).forEach(el => {
+      el.onclick = () => openDetail(el.dataset.id);
+    });
+  }
+
+  async function openDetail(id) {
+    const res = await fetch(`${API_BASE}/preprints/${id}/`);
+    const p = await res.json();
+    $("#detail-content").innerHTML = `
+      <div style="font-size:16px; color:#e5e7eb; font-weight:600; margin-bottom:4px;">${p.title}</div>
+      <div style="margin-bottom:6px;">
+        ${p.authors ? `<div><strong>Authors:</strong> ${p.authors}</div>` : ""}
+        ${p.faculty ? `<div><strong>Faculty:</strong> ${p.faculty}</div>` : ""}
+        ${p.course_code ? `<div><strong>Course:</strong> ${p.course_code}</div>` : ""}
+        <div><strong>Category:</strong> ${p.category}</div>
+        <div><strong>Status:</strong> ${p.status}</div>
+        <div><strong>Uploaded:</strong> ${p.uploaded_at}</div>
+      </div>
+      <div style="margin-bottom:10px; color:#9ca3af;">${p.abstract}</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        ${p.pdf_file ? `<button class="btn" onclick="viewPDF('${p.pdf_file}')">View PDF</button>` : ""}
+        ${p.pdf_file ? `<a class="btn secondary" href="${p.pdf_file}" download>Download PDF</a>` : ""}
+        ${p.doi ? `<span class="doi">${p.doi}</span>` : ""}
+      </div>
+    `;
+  }
+
+  function viewPDF(url) {
+    $("#pdf-frame").src = url;
+    $("#pdf-viewer").style.display = "block";
+  }
+
+  $("#pdf-close").onclick = () => {
+    $("#pdf-viewer").style.display = "none";
+    $("#pdf-frame").src = "";
+  };
+
+  // Upload modal logic
+  $("#open-upload").onclick = () => { $("#modal").style.display = "flex"; };
+  $("#close-upload").onclick = () => { $("#modal").style.display = "none"; };
+
+  $("#upload-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const res = await fetch(`${API_BASE}/preprints/`, {
+      method: "POST",
+      body: fd
+    });
+    if (!res.ok) {
+      $("#upload-msg").textContent = "Upload failed.";
+      return;
+    }
+    $("#upload-msg").textContent = "Uploaded!";
+    await loadPreprints();
+    setTimeout(() => {
+      $("#modal").style.display = "none";
+      $("#upload-msg").textContent = "";
+      e.target.reset();
+    }, 700);
+  };
+
+  $("#search").oninput = () => loadPreprints();
+  $("#category").onchange = () => loadPreprints();
+
+  loadPreprints();
+</script>
+
+</body>
+</html>
